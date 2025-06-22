@@ -18,7 +18,12 @@ A FastAPI-based registry server with Redis backend for application/endpoint mana
   "app_key": "myapp",
   "app_description": "Demo application for testing",
   "base_domain": "https://myapp.example.com",
-  "app_healthcheck_endpoint": "https://myapp.example.com/health"
+  "app_healthcheck_endpoint": "https://myapp.example.com/health",
+  "security": {
+    "type": "api_key",
+    "header": "X-API-KEY",
+    "secret_ref": "myapp_api_key"
+  }
 }
 ```
 

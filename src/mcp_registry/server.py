@@ -3,13 +3,16 @@ import os
 import json
 import redis.asyncio as aioredis
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 from .config import REDIS_URL
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
-APP_KEY_PREFIX = "app:"
+APP_KEY_PREFIX = "com.autogentmcp.registry:app:"
 HEARTBEAT_TTL = 60  # seconds
 
 def app_key(app_key):
@@ -26,31 +29,64 @@ class ApplicationRegistration(BaseModel):
     app_description: str
     base_domain: str = ""
     app_healthcheck_endpoint: str = ""
+    security: dict = {}  # Security config at app level
 
 class EndpointRegistration(BaseModel):
     app_key: str
     endpoint_uri: str
     endpoint_description: str = ""
     parameter_details: dict = {}  # Example: {"param1": {"type": "string", "description": "The user's name"}}
-    security: dict = {}
+    # No security field by default; only add if you want endpoint-level override
 
-@app.post("/register_application")
-async def register_application(data: ApplicationRegistration):
+REGISTRY_ADMIN_KEY = os.getenv("REGISTRY_ADMIN_KEY")
+
+print(f"Using registry admin key: {REGISTRY_ADMIN_KEY}")
+
+def verify_admin_key(x_api_key: str = Header(..., alias="X-API-KEY")):
+    if x_api_key != REGISTRY_ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.post("/register/application")
+async def register_application(
+    data: ApplicationRegistration,
+    admin: None = Depends(verify_admin_key)
+):
     redis = await get_redis()
+    key = app_key(data.app_key)
+    existing = await redis.get(key)
     app_data = data.dict()
+    if existing:
+        # Update existing app, preserve fields not in new registration
+        current = json.loads(existing)
+        current.update(app_data)
+        app_data = current
     app_data["status"] = "enabled"
-    await redis.set(app_key(data.app_key), json.dumps(app_data))
-    await redis.expire(app_key(data.app_key), HEARTBEAT_TTL)
-    return {"message": f"Registered application '{data.app_key}'"}
+    await redis.set(key, json.dumps(app_data))
+    await redis.expire(key, HEARTBEAT_TTL)
+    return {"message": f"{'Updated' if existing else 'Registered'} application '{data.app_key}'"}
 
-@app.post("/register_endpoint")
-async def register_endpoint(data: EndpointRegistration):
+@app.post("/register/endpoint")
+async def register_endpoint(
+    data: EndpointRegistration,
+    admin: None = Depends(verify_admin_key)
+):
     redis = await get_redis()
-    endpoint_data = data.dict()
-    await redis.rpush(endpoint_key(data.app_key), json.dumps(endpoint_data))
-    return {"message": f"Registered endpoint '{data.endpoint_uri}' for app '{data.app_key}'"}
+    ep_data = data.dict()
+    ep_list_key = endpoint_key(data.app_key)
+    endpoints = await redis.lrange(ep_list_key, 0, -1)
+    updated = False
+    for idx, ep_json in enumerate(endpoints):
+        ep = json.loads(ep_json)
+        if ep.get("endpoint_uri") == data.endpoint_uri:
+            # Update existing endpoint
+            await redis.lset(ep_list_key, idx, json.dumps(ep_data))
+            updated = True
+            break
+    if not updated:
+        await redis.rpush(ep_list_key, json.dumps(ep_data))
+    return {"message": f"{'Updated' if updated else 'Registered'} endpoint '{data.endpoint_uri}' for app '{data.app_key}'"}
 
-@app.get("/list_endpoints")
+@app.get("/endpoints")
 async def list_endpoints():
     redis = await get_redis()
     keys = await redis.keys(f"{APP_KEY_PREFIX}*")
@@ -64,12 +100,14 @@ async def list_endpoints():
             endpoints = await redis.lrange(endpoint_key(app["app_key"]), 0, -1)
             for ep_json in endpoints:
                 ep = json.loads(ep_json)
+                # Use endpoint security if present, else fallback to app security
+                security = ep.get("security") if "security" in ep else app.get("security", {})
                 resources.append({
                     "app_key": app["app_key"],
                     "endpoint_uri": ep["endpoint_uri"],
                     "endpoint_description": ep.get("endpoint_description", ""),
                     "parameter_details": ep.get("parameter_details", {}),
-                    "security": ep.get("security", {})
+                    "security": security
                 })
     return resources
 

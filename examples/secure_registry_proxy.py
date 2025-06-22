@@ -1,17 +1,29 @@
 # Example: Secure Registry and Proxy Architecture
 
 # 1. Registry stores only metadata and secret references
-# Example endpoint registration payload (sent from portal to registry):
+# Example application registration payload (security at app level):
+app_data = {
+    "app_key": "myapp",
+    "app_description": "Demo app",
+    "base_domain": "https://myapp.example.com",
+    "app_healthcheck_endpoint": "https://myapp.example.com/health",
+    "security": {
+        "type": "api_key",
+        "header": "X-API-KEY",
+        "secret_ref": "myapp_api_key"
+    }
+}
+
+# Example endpoint registration payload (no security field unless overriding):
 endpoint_data = {
     "app_key": "myapp",
     "endpoint_uri": "/api/do-something",
     "endpoint_description": "Does something",
-    "parameter_details": {},
-    "security": {
-        "type": "api_key",
-        "header": "X-API-KEY",
-        "secret_ref": "myapp_api_key"  # This is a reference, not the actual secret
+    "parameter_details": {
+        "param1": {"type": "string", "description": "The user's name"},
+        "param2": {"type": "int", "description": "The user's age"}
     }
+    # Optionally, add a 'security' field here to override app-level security
 }
 
 # 2. Portal stores the actual secret securely (e.g., in Akeyless, Vault, or encrypted DB)

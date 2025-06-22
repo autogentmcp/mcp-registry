@@ -4,3 +4,4 @@ redis
 httpx
 cryptography
 pydantic
+python-dotenv
