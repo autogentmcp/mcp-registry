@@ -1,0 +1,17 @@
+[project]
+name = "mcp-registry"
+version = "0.1.0"
+description = "MCP registry server with Redis backend for agent/tool management and heartbeat monitoring"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [ "mcp>=1.9.4",]
+[[project.authors]]
+name = "spranab"
+email = "developer@pranab.co.in"
+
+[build-system]
+requires = [ "hatchling",]
+build-backend = "hatchling.build"
+
+[project.scripts]
+mcp-registry = "mcp_registry:main"
