@@ -65,7 +65,7 @@ async def register_application(
         app_data = current
     app_data["status"] = "enabled"
     await redis.set(key, json.dumps(app_data))
-    await redis.expire(key, HEARTBEAT_TTL)
+    # Removed expiration
     return {"message": f"{'Updated' if existing else 'Registered'} application '{data.app_key}'"}
 
 @app.post("/register/endpoint")
@@ -133,7 +133,7 @@ async def heartbeat(app_key: str):
     app = json.loads(data)
     app["status"] = "enabled"
     await redis.set(key, json.dumps(app))
-    await redis.expire(key, HEARTBEAT_TTL)
+    # Removed expiration
     return {"message": f"Heartbeat received for '{app_key}'"}
 
 async def monitor_heartbeats_and_health():
@@ -168,3 +168,24 @@ async def monitor_heartbeats_and_health():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(monitor_heartbeats_and_health())
+
+@app.get("/apps_with_endpoints")
+async def apps_with_endpoints():
+    redis = await get_redis()
+    keys = await redis.keys(f"{APP_KEY_PREFIX}*")
+    apps = []
+    for key in keys:
+        if key.endswith(":endpoints"):
+            continue
+        app_data = await redis.get(key)
+        if app_data:
+            app = json.loads(app_data)
+            endpoints = []
+            endpoint_list = await redis.lrange(endpoint_key(app["app_key"]), 0, -1)
+            for ep_json in endpoint_list:
+                ep = json.loads(ep_json)
+                endpoints.append(ep)
+            app_entry = app.copy()
+            app_entry["endpoints"] = endpoints
+            apps.append(app_entry)
+    return {"applications": apps}
