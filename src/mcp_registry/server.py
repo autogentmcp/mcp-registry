@@ -33,10 +33,13 @@ class ApplicationRegistration(BaseModel):
 
 class EndpointRegistration(BaseModel):
     app_key: str
-    endpoint_uri: str
-    endpoint_description: str = ""
-    parameter_details: dict = {}  # Example: {"param1": {"type": "string", "description": "The user's name"}}
+    uri: str
+    description: str = ""
     # No security field by default; only add if you want endpoint-level override
+    pathParams: dict = {}  # New field for path parameters
+    queryParams: dict = {}  # New field for query parameters
+    requestBody: dict = {}  # New field for request body
+    method: str  # New field for HTTP method
 
 REGISTRY_ADMIN_KEY = os.getenv("REGISTRY_ADMIN_KEY")
 
@@ -71,20 +74,29 @@ async def register_endpoint(
     admin: None = Depends(verify_admin_key)
 ):
     redis = await get_redis()
-    ep_data = data.dict()
+    # Map model fields to storage fields
+    ep_data = {
+        "app_key": data.app_key,
+        "endpoint_uri": data.uri,
+        "endpoint_description": data.description,
+        "path_params": data.pathParams,
+        "query_params": data.queryParams,
+        "request_body": data.requestBody,
+        "method": data.method
+    }
     ep_list_key = endpoint_key(data.app_key)
     endpoints = await redis.lrange(ep_list_key, 0, -1)
     updated = False
     for idx, ep_json in enumerate(endpoints):
         ep = json.loads(ep_json)
-        if ep.get("endpoint_uri") == data.endpoint_uri:
-            # Update existing endpoint
+        if ep.get("endpoint_uri") == ep_data["endpoint_uri"] and ep.get("method", "GET") == ep_data["method"]:
+            # Update existing endpoint (match by uri and method)
             await redis.lset(ep_list_key, idx, json.dumps(ep_data))
             updated = True
             break
     if not updated:
         await redis.rpush(ep_list_key, json.dumps(ep_data))
-    return {"message": f"{'Updated' if updated else 'Registered'} endpoint '{data.endpoint_uri}' for app '{data.app_key}'"}
+    return {"message": f"{'Updated' if updated else 'Registered'} endpoint '{ep_data['endpoint_uri']}' [{ep_data['method']}] for app '{ep_data['app_key']}'"}
 
 @app.get("/endpoints")
 async def list_endpoints():
