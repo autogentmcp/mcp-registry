@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Registry API</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+            color: #333;
+        }
+        h1 {
+            color: #0066cc;
+            margin-bottom: 1rem;
+        }
+        h2 {
+            color: #0066cc;
+            margin-top: 2rem;
+        }
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .endpoint {
+            background-color: #f7f7f7;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #0066cc;
+            border-radius: 0 4px 4px 0;
+        }
+        .method {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+        .get {
+            background-color: #61affe;
+            color: white;
+        }
+        .post {
+            background-color: #49cc90;
+            color: white;
+        }
+        .put {
+            background-color: #fca130;
+            color: white;
+        }
+        .delete {
+            background-color: #f93e3e;
+            color: white;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>MCP Registry API</h1>
+    <p>Welcome to the Model Context Protocol (MCP) Registry API. This service allows applications to register and discover MCP endpoints.</p>
+
+    <h2>Documentation</h2>
+    <p>For detailed API documentation, please visit:</p>
+    <ul>                <li><a href="/docs" target="_blank">Interactive API Documentation (Swagger UI)</a></li>
+                <li><a href="/redoc" target="_blank">Alternative API Documentation (ReDoc)</a></li>
+                <li><a href="/openapi.json" target="_blank">Raw OpenAPI Schema (JSON)</a></li>
+                <li><a href="/health" target="_blank">Health Check Endpoint</a></li>
+    </ul>
+
+    <h2>Key Endpoints</h2>
+    
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <code>/applications</code>
+        <p>List all applications registered in the system. Requires admin authentication.</p>
+    </div>
+    
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <code>/applications/with-endpoints</code>
+        <p>List all applications with their endpoints for a specific environment. Requires admin authentication.</p>
+    </div>
+    
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <code>/endpoints</code>
+        <p>List all endpoints for an application in a specific environment. Provides environment data including baseDomain.</p>
+    </div>
+    
+    <div class="endpoint">
+        <span class="method post">POST</span>
+        <code>/endpoints</code>
+        <p>Register endpoints for an application. Authentication is done via API key.</p>
+    </div>
+
+    <h2>About MCP</h2>
+    <p>
+        The Model Context Protocol (MCP) provides a standardized way for applications to communicate with AI models 
+        and exchange context information. This registry serves as a central directory for MCP-compatible endpoints, 
+        allowing applications to discover and interact with each other.
+    </p>
+    
+    <footer style="margin-top: 3rem; border-top: 1px solid #ddd; padding-top: 1rem; font-size: 0.9rem; color: #666;">
+        <p>MCP Registry API v1.0.0</p>
+    </footer>
+</body>
+</html>

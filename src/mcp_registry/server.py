@@ -1,191 +1,386 @@
-import asyncio
-import os
-import json
-import redis.asyncio as aioredis
-import httpx
-from fastapi import FastAPI, HTTPException, Header, Depends
-from pydantic import BaseModel
-from .config import REDIS_URL
-from dotenv import load_dotenv
+import logging
+from datetime import datetime
+from typing import List, Optional, Dict, Any
 
-load_dotenv()
+from fastapi import FastAPI, Depends, HTTPException, Request, status, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, RedirectResponse
+import bcrypt
 
-app = FastAPI()
+from .config import settings
+from .database import init_db, close_prisma, get_prisma
+from .health_check import setup_scheduler, router as health_check_router
+from .models import (
+    ApplicationEndpointsRegistration,
+    ApplicationUpdate,
+    RegistrationResult,
+    ApplicationResponse,
+    EndpointsWithEnvironmentResponse,
+    ApplicationWithEnvironmentEndpoints
+)
+from .auth import (
+    validate_application_access,
+    get_application_by_app_key,
+    verify_admin_key
+)
+from .endpoint_registration import register_endpoints
 
-APP_KEY_PREFIX = "com.autogentmcp.registry:app:"
-HEARTBEAT_TTL = 60  # seconds
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def app_key(app_key):
-    return f"{APP_KEY_PREFIX}{app_key}"
-
-def endpoint_key(app_key):
-    return f"{APP_KEY_PREFIX}{app_key}:endpoints"
-
-async def get_redis():
-    return await aioredis.from_url(REDIS_URL, decode_responses=True)
-
-class ApplicationRegistration(BaseModel):
-    app_key: str
-    app_description: str
-    base_domain: str = ""
-    app_healthcheck_endpoint: str = ""
-    security: dict = {}  # Security config at app level
-
-class EndpointRegistration(BaseModel):
-    app_key: str
-    uri: str
-    description: str = ""
-    # No security field by default; only add if you want endpoint-level override
-    pathParams: dict = {}  # New field for path parameters
-    queryParams: dict = {}  # New field for query parameters
-    requestBody: dict = {}  # New field for request body
-    method: str  # New field for HTTP method
-
-REGISTRY_ADMIN_KEY = os.getenv("REGISTRY_ADMIN_KEY")
-
-print(f"Using registry admin key: {REGISTRY_ADMIN_KEY}")
-
-def verify_admin_key(x_api_key: str = Header(..., alias="X-API-KEY")):
-    if x_api_key != REGISTRY_ADMIN_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-@app.post("/register/application")
-async def register_application(
-    data: ApplicationRegistration,
-    admin: None = Depends(verify_admin_key)
-):
-    redis = await get_redis()
-    key = app_key(data.app_key)
-    existing = await redis.get(key)
-    app_data = data.dict()
-    if existing:
-        # Update existing app, preserve fields not in new registration
-        current = json.loads(existing)
-        current.update(app_data)
-        app_data = current
-    app_data["status"] = "enabled"
-    await redis.set(key, json.dumps(app_data))
-    # Removed expiration
-    return {"message": f"{'Updated' if existing else 'Registered'} application '{data.app_key}'"}
-
-@app.post("/register/endpoint")
-async def register_endpoint(
-    data: EndpointRegistration,
-    admin: None = Depends(verify_admin_key)
-):
-    redis = await get_redis()
-    # Map model fields to storage fields
-    ep_data = {
-        "app_key": data.app_key,
-        "endpoint_uri": data.uri,
-        "endpoint_description": data.description,
-        "path_params": data.pathParams,
-        "query_params": data.queryParams,
-        "request_body": data.requestBody,
-        "method": data.method
-    }
-    ep_list_key = endpoint_key(data.app_key)
-    endpoints = await redis.lrange(ep_list_key, 0, -1)
-    updated = False
-    for idx, ep_json in enumerate(endpoints):
-        ep = json.loads(ep_json)
-        if ep.get("endpoint_uri") == ep_data["endpoint_uri"] and ep.get("method", "GET") == ep_data["method"]:
-            # Update existing endpoint (match by uri and method)
-            await redis.lset(ep_list_key, idx, json.dumps(ep_data))
-            updated = True
-            break
-    if not updated:
-        await redis.rpush(ep_list_key, json.dumps(ep_data))
-    return {"message": f"{'Updated' if updated else 'Registered'} endpoint '{ep_data['endpoint_uri']}' [{ep_data['method']}] for app '{ep_data['app_key']}'"}
-
-@app.get("/endpoints")
-async def list_endpoints():
-    redis = await get_redis()
-    keys = await redis.keys(f"{APP_KEY_PREFIX}*")
-    resources = []
-    for key in keys:
-        if key.endswith(":endpoints"):
-            continue
-        app_data = await redis.get(key)
-        if app_data:
-            app = json.loads(app_data)
-            endpoints = await redis.lrange(endpoint_key(app["app_key"]), 0, -1)
-            for ep_json in endpoints:
-                ep = json.loads(ep_json)
-                # Use endpoint security if present, else fallback to app security
-                security = ep.get("security") if "security" in ep else app.get("security", {})
-                resources.append({
-                    "app_key": app["app_key"],
-                    "endpoint_uri": ep["endpoint_uri"],
-                    "endpoint_description": ep.get("endpoint_description", ""),
-                    "parameter_details": ep.get("parameter_details", {}),
-                    "security": security
-                })
-    return resources
-
-@app.post("/heartbeat")
-async def heartbeat(app_key: str):
-    redis = await get_redis()
-    key = app_key(app_key)
-    data = await redis.get(key)
-    if not data:
-        raise HTTPException(status_code=404, detail="Application not found")
-    app = json.loads(data)
-    app["status"] = "enabled"
-    await redis.set(key, json.dumps(app))
-    # Removed expiration
-    return {"message": f"Heartbeat received for '{app_key}'"}
-
-async def monitor_heartbeats_and_health():
-    redis = await get_redis()
-    while True:
-        keys = await redis.keys(f"{APP_KEY_PREFIX}*")
-        for key in keys:
-            if key.endswith(":endpoints"):
-                continue
-            ttl = await redis.ttl(key)
-            data = await redis.get(key)
-            if not data:
-                continue
-            app = json.loads(data)
-            if ttl == -2 or ttl <= 0:
-                app["status"] = "disabled"
-                await redis.set(key, json.dumps(app))
-                continue
-            health_url = app.get("app_healthcheck_endpoint")
-            if health_url:
+async def verify_api_key(provided_key: str, application_id: str, environment_id: str = None) -> bool:
+    """
+    Verify a provided API key against hashed keys in the database.
+    
+    Args:
+        provided_key: The plain text API key provided by the client
+        application_id: The application ID to check keys for
+        environment_id: Optional environment ID to check keys for (if None, checks all environments)
+        
+    Returns:
+        bool: True if the key is valid, False otherwise
+    """
+    try:
+        async with get_prisma() as prisma:
+            # Build query filter
+            where_clause = {"applicationId": application_id}
+            if environment_id:
+                where_clause["environmentId"] = environment_id
+            
+            # Find API keys for this application (and optionally environment)
+            api_keys = await prisma.apikey.find_many(
+                where=where_clause
+            )
+            
+            # Verify the provided API key against the hashed keys in the database
+            for stored_key in api_keys:
                 try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        resp = await client.get(health_url)
-                        if resp.status_code != 200:
-                            app["status"] = "disabled"
-                            await redis.set(key, json.dumps(app))
-                except Exception:
-                    app["status"] = "disabled"
-                    await redis.set(key, json.dumps(app))
-        await asyncio.sleep(10)
+                    # Convert the provided API key to bytes and verify against the stored hash
+                    if bcrypt.checkpw(provided_key.encode('utf-8'), stored_key.token.encode('utf-8')):
+                        return True
+                except Exception as e:
+                    logger.warning(f"Error verifying API key: {e}")
+                    continue
+            
+            return False
+    except Exception as e:
+        logger.error(f"Error during API key verification: {e}")
+        return False
 
+# Create FastAPI app
+app = FastAPI(
+    title=settings.APP_NAME,
+    description=settings.APP_DESCRIPTION,
+    version=settings.APP_VERSION,
+    debug=settings.DEBUG
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["X-API-Key", "X-App-Key", "X-Admin-Key", "X-Environment", 
+                   "Content-Type", "Authorization"],
+)
+
+# Mount static files directory
+import os
+import pathlib
+current_dir = pathlib.Path(__file__).parent.absolute()
+static_dir = os.path.join(current_dir, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Include health check router
+app.include_router(health_check_router)
+
+# Events
 @app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(monitor_heartbeats_and_health())
+async def startup_db_client():
+    await init_db()
+    # Setup health check scheduler
+    setup_scheduler(app)
 
-@app.get("/apps_with_endpoints")
-async def apps_with_endpoints():
-    redis = await get_redis()
-    keys = await redis.keys(f"{APP_KEY_PREFIX}*")
-    apps = []
-    for key in keys:
-        if key.endswith(":endpoints"):
-            continue
-        app_data = await redis.get(key)
-        if app_data:
-            app = json.loads(app_data)
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    await close_prisma()
+
+# Root endpoint - redirect to welcome page
+@app.get("/", response_class=RedirectResponse, status_code=302)
+async def root():
+    """Redirect to the static welcome page"""
+    return "/static/index.html"
+
+# Health check endpoint
+@app.get("/health")
+async def health():
+    """
+    Health check endpoint that returns the status of the service and its dependencies.
+    """
+    db_status = "ok"
+    
+    # Check database connection
+    try:
+        async with get_prisma() as prisma:
+            await prisma.application.count()
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        db_status = "error"
+    
+    return {
+        "status": "ok" if db_status == "ok" else "error",
+        "version": settings.APP_VERSION,
+        "dependencies": {
+            "database": db_status
+        },
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+# Endpoint 1: Update Application
+@app.put("/applications/{app_key}", response_model=ApplicationResponse)
+async def update_application(
+    app_key: str,
+    app_data: ApplicationUpdate,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    app_key_header: str = Header(None, alias="X-App-Key")
+):
+    """
+    Update an application's details.
+    
+    Only name, description, and healthCheckUrl can be updated.
+    Authentication is required via API key in the X-API-Key header and
+    application key in the X-App-Key header.
+    """
+    # Validate API key and app key
+    if not api_key or not app_key_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing required authentication headers"
+        )
+    
+    # Verify that app_key in path matches app_key in header
+    if app_key != app_key_header:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="App key in path must match App key in header"
+        )
+        
+    async with get_prisma() as prisma:
+        # Find the application by app_key
+        app = await prisma.application.find_unique(
+            where={"appKey": app_key}
+        )
+        
+        if not app:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Application not found"
+            )
+            
+        # Verify API key
+        if not await verify_api_key(api_key, app.id):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key for this application"
+            )
+    
+        # Update the application - only specific fields allowed
+        update_data = {}
+        if app_data.name is not None:
+            update_data["name"] = app_data.name
+        if app_data.description is not None:
+            update_data["description"] = app_data.description
+        if app_data.healthCheckUrl is not None:
+            update_data["healthCheckUrl"] = app_data.healthCheckUrl
+            
+        updated_app = await prisma.application.update(
+            where={"id": app.id},
+            data=update_data
+        )
+        
+        # Create audit log
+        try:
+            await prisma.auditlog.create(data={
+                "action": "update_application",
+                "details": f"Updated application {app_key}",
+                "ipAddress": request.client.host,
+                "userAgent": request.headers.get("user-agent"),
+                "applicationId": app.id
+            })
+        except Exception as e:
+            logger.error(f"Error creating audit log: {e}")
+        
+        return updated_app
+
+# Endpoint 2: Register Endpoints
+@app.post("/register/endpoints", response_model=RegistrationResult)
+async def register_application_endpoints(
+    registration: ApplicationEndpointsRegistration,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    app_key_header: str = Header(None, alias="X-App-Key")
+):
+    """
+    Register multiple endpoints for an application.
+    
+    This endpoint accepts a list of endpoints to register for an application.
+    It validates the application and API key, then updates or creates endpoints
+    as needed, and removes any endpoints that weren't included in the request.
+    
+    Authentication is done via API key in the X-API-Key header and
+    application key in the X-App-Key header.
+    """
+    # Validate headers match what's in the registration
+    if app_key_header != registration.app_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="App key in header must match app_key in request body"
+        )
+    
+    return await register_endpoints(request, registration)
+
+# Endpoint 3: List Endpoints
+@app.get("/endpoints", response_model=EndpointsWithEnvironmentResponse)
+async def list_endpoints(
+    app_key: str,
+    environment: Optional[str] = "production"
+):
+    """
+    List all endpoints for an application in a specific environment.
+    
+    Returns both the environment data (including baseDomain) and the endpoints.
+    """
+    async with get_prisma() as prisma:
+        # Find application by app_key
+        application = await prisma.application.find_unique(
+            where={"appKey": app_key}
+        )
+        
+        if not application:
+            raise HTTPException(status_code=404, detail="Application not found")
+        
+        # Find environment by name
+        environment_obj = await prisma.environment.find_first(
+            where={
+                "applicationId": application.id,
+                "name": environment
+            }
+        )
+        
+        if not environment_obj:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Environment '{environment}' not found for this application"
+            )
+        
+        # Get endpoints for this application and environment
+        endpoints = await prisma.endpoint.find_many(
+            where={
+                "applicationId": application.id,
+                "environmentId": environment_obj.id
+            }
+        )
+        
+        # Return both environment data and endpoints, safely handling the baseDomain field
+        return {
+            "environment": {
+                "id": environment_obj.id,
+                "name": environment_obj.name,
+                "description": environment_obj.description,
+                "baseDomain": getattr(environment_obj, "baseDomain", None),
+                "status": environment_obj.status,
+                "applicationId": environment_obj.applicationId,
+                "createdAt": environment_obj.createdAt,
+                "updatedAt": environment_obj.updatedAt
+            },
+            "endpoints": endpoints
+        }
+
+# Endpoint 4: List all applications
+@app.get("/applications", response_model=List[ApplicationResponse])
+async def list_applications(
+    admin_key: str = Depends(verify_admin_key)
+):
+    """
+    List all applications registered in the system.
+    Requires admin authentication.
+    """
+    async with get_prisma() as prisma:
+        applications = await prisma.application.find_many()
+        return applications
+
+# Endpoint 5: List all applications with their endpoints
+@app.get("/applications/with-endpoints")
+async def list_applications_with_endpoints(
+    admin_key: str = Depends(verify_admin_key),
+    environment: Optional[str] = "production"
+):
+    """
+    List all applications with their endpoints for a specific environment.
+    Requires admin authentication.
+    
+    Returns a list of applications, each with their environment data (including baseDomain) 
+    and associated endpoints.
+    """
+    async with get_prisma() as prisma:
+        # Get all applications
+        applications = await prisma.application.find_many(
+            include={
+                "environments": True
+            }
+        )
+        
+        result = []
+        
+        # For each application, get its endpoints
+        for app in applications:
+            # Find the specified environment for this application
+            app_env = next((env for env in app.environments if env.name == environment), None)
+            
+            environment_data = None
             endpoints = []
-            endpoint_list = await redis.lrange(endpoint_key(app["app_key"]), 0, -1)
-            for ep_json in endpoint_list:
-                ep = json.loads(ep_json)
-                endpoints.append(ep)
-            app_entry = app.copy()
-            app_entry["endpoints"] = endpoints
-            apps.append(app_entry)
-    return {"applications": apps}
+            
+            if app_env:
+                # Create environment data, safely handling the baseDomain field
+                environment_data = {
+                    "id": app_env.id,
+                    "name": app_env.name,
+                    "description": app_env.description,
+                    "baseDomain": getattr(app_env, "baseDomain", None),
+                    "status": app_env.status,
+                    "createdAt": app_env.createdAt,
+                    "updatedAt": app_env.updatedAt,
+                    "applicationId": app_env.applicationId
+                }
+                
+                # Get endpoints for this application and environment
+                endpoints = await prisma.endpoint.find_many(
+                    where={
+                        "applicationId": app.id,
+                        "environmentId": app_env.id
+                    }
+                )
+            
+            # Create a response object directly
+            app_data = {
+                "id": app.id,
+                "name": app.name,
+                "description": app.description,
+                "appKey": app.appKey,
+                "status": app.status,
+                "authenticationMethod": app.authenticationMethod,
+                "healthCheckUrl": app.healthCheckUrl,
+                "createdAt": app.createdAt,
+                "updatedAt": app.updatedAt,
+                "userId": app.userId,
+                "environment": environment_data,
+                "endpoints": endpoints
+            }
+            
+            result.append(app_data)
+        
+        return result
