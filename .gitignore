@@ -39,5 +39,6 @@ prisma/.prisma
 # Misc
 .env
 .env.*
+!.env.example
 *.bak
 *.swp
