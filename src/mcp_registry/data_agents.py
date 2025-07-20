@@ -41,18 +41,26 @@ router = APIRouter(prefix="/data-agents", tags=["data-agents"])
 
 @router.get("/", response_model=List[DataAgentResponse])
 async def list_data_agents(
+    environment: str,  # Made mandatory for data integrity
     admin_key: str = Depends(verify_admin_key),
     status: Optional[str] = None
 ):
     """
-    List all data agents in the system.
-    Requires admin authentication.
+    List all data agents in the system for a specific environment.
+    Requires admin authentication and environment parameter.
     
     Args:
+        environment: Required environment name (e.g., production, staging)
         status: Optional filter by status (ACTIVE, INACTIVE, CONNECTING, ERROR)
     """
     async with get_prisma() as prisma:
-        where_clause = {}
+        where_clause = {
+            "environments": {
+                "some": {
+                    "name": environment
+                }
+            }
+        }
         if status:
             where_clause["status"] = status
             
@@ -240,32 +248,28 @@ async def get_data_agent_environment_details(
 @router.get("/{agent_id}", response_model=DataAgentWithTablesResponse)
 async def get_data_agent(
     agent_id: str,
+    environment: str,  # Made mandatory for environment-scoped access
     admin_key: str = Depends(verify_admin_key),
     include_tables: bool = True,
     include_relations: bool = True
 ):
     """
-    Get a specific data agent with optional nested data.
-    Requires admin authentication.
+    Get a specific data agent with optional nested data for a specific environment.
+    Requires admin authentication and environment parameter.
     
     Args:
         agent_id: The ID of the data agent
+        environment: Required environment name (e.g., production, staging)
         include_tables: Whether to include table data
         include_relations: Whether to include relationship data
     """
     async with get_prisma() as prisma:
-        # Build include clause based on parameters
-        include_clause = {}
-        if include_tables:
-            include_clause["tables"] = {
-                "include": {"columns": True}
-            }
-        if include_relations:
-            include_clause["relations"] = True
-            
+        # First verify the data agent exists and has the specified environment
         data_agent = await prisma.dataagent.find_unique(
             where={"id": agent_id},
-            include=include_clause
+            include={
+                "environments": True
+            }
         )
         
         if not data_agent:
@@ -273,8 +277,38 @@ async def get_data_agent(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Data agent not found"
             )
+        
+        # Verify the environment exists for this data agent
+        target_environment = next(
+            (env for env in data_agent.environments if env.name == environment), 
+            None
+        )
+        
+        if not target_environment:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Environment '{environment}' not found for data agent '{data_agent.name}'"
+            )
+        
+        # Build include clause based on parameters and environment
+        include_clause = {}
+        if include_tables:
+            include_clause["tables"] = {
+                "include": {"columns": True},
+                "where": {"environmentId": target_environment.id}
+            }
+        if include_relations:
+            include_clause["relations"] = {
+                "where": {"environmentId": target_environment.id}
+            }
             
-        return data_agent
+        # Get the data agent with environment-scoped data
+        data_agent_with_data = await prisma.dataagent.find_unique(
+            where={"id": agent_id},
+            include=include_clause
+        )
+            
+        return data_agent_with_data
 
 
 @router.post("/", response_model=DataAgentResponse)
@@ -381,26 +415,50 @@ async def delete_data_agent(
 @router.get("/{agent_id}/tables", response_model=List[DataAgentTableResponse])
 async def list_agent_tables(
     agent_id: str,
+    environment: str,  # Made mandatory for environment-scoped access
     admin_key: str = Depends(verify_admin_key),
     include_columns: bool = True
 ):
     """
-    List all tables for a specific data agent.
-    Requires admin authentication.
+    List all tables for a specific data agent in a specific environment.
+    Requires admin authentication and environment parameter.
+    
+    Args:
+        agent_id: The ID of the data agent
+        environment: Required environment name (e.g., production, staging)
+        include_columns: Whether to include column data
     """
     async with get_prisma() as prisma:
-        # Verify data agent exists
-        agent = await prisma.dataagent.find_unique(where={"id": agent_id})
+        # Verify data agent exists and has the specified environment
+        agent = await prisma.dataagent.find_unique(
+            where={"id": agent_id},
+            include={"environments": True}
+        )
         if not agent:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Data agent not found"
             )
+        
+        # Find the target environment
+        target_environment = next(
+            (env for env in agent.environments if env.name == environment), 
+            None
+        )
+        
+        if not target_environment:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Environment '{environment}' not found for data agent '{agent.name}'"
+            )
             
         include_clause = {"columns": True} if include_columns else {}
         
-        tables = await prisma.dataagentTable.find_many(
-            where={"dataAgentId": agent_id},
+        tables = await prisma.dataagenttable.find_many(
+            where={
+                "dataAgentId": agent_id,
+                "environmentId": target_environment.id
+            },
             include=include_clause,
             order={"tableName": "asc"}
         )
@@ -411,31 +469,51 @@ async def list_agent_tables(
 @router.get("/{agent_id}/relations", response_model=List[DataAgentRelationResponse])
 async def list_agent_relations(
     agent_id: str,
+    environment: str,  # Made mandatory for environment-scoped access
     admin_key: str = Depends(verify_admin_key),
     verified_only: bool = False
 ):
     """
-    List all relationships for a specific data agent.
-    Requires admin authentication.
+    List all relationships for a specific data agent in a specific environment.
+    Requires admin authentication and environment parameter.
     
     Args:
         agent_id: The ID of the data agent
+        environment: Required environment name (e.g., production, staging)
         verified_only: If True, return only verified relationships
     """
     async with get_prisma() as prisma:
-        # Verify data agent exists
-        agent = await prisma.dataagent.find_unique(where={"id": agent_id})
+        # Verify data agent exists and has the specified environment
+        agent = await prisma.dataagent.find_unique(
+            where={"id": agent_id},
+            include={"environments": True}
+        )
         if not agent:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Data agent not found"
             )
+        
+        # Find the target environment
+        target_environment = next(
+            (env for env in agent.environments if env.name == environment), 
+            None
+        )
+        
+        if not target_environment:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Environment '{environment}' not found for data agent '{agent.name}'"
+            )
             
-        where_clause = {"dataAgentId": agent_id}
+        where_clause = {
+            "dataAgentId": agent_id,
+            "environmentId": target_environment.id
+        }
         if verified_only:
             where_clause["isVerified"] = True
             
-        relations = await prisma.dataagentRelation.find_many(
+        relations = await prisma.dataagentrelation.find_many(
             where=where_clause,
             order={"confidence": "desc"}
         )
@@ -446,45 +524,67 @@ async def list_agent_relations(
 @router.post("/{agent_id}/relations", response_model=DataAgentRelationResponse)
 async def create_agent_relation(
     agent_id: str,
+    environment: str,  # Made mandatory for environment-scoped relations
     relation_data: DataAgentRelationCreate,
     admin_key: str = Depends(verify_admin_key)
 ):
     """
-    Create a new relationship for a data agent.
-    Requires admin authentication.
+    Create a new relationship for a data agent in a specific environment.
+    Requires admin authentication and environment parameter.
+    
+    Args:
+        agent_id: The ID of the data agent
+        environment: Required environment name (e.g., production, staging)
+        relation_data: The relationship data to create
     """
     async with get_prisma() as prisma:
-        # Verify data agent exists
-        agent = await prisma.dataagent.find_unique(where={"id": agent_id})
+        # Verify data agent exists and has the specified environment
+        agent = await prisma.dataagent.find_unique(
+            where={"id": agent_id},
+            include={"environments": True}
+        )
         if not agent:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Data agent not found"
             )
+        
+        # Find the target environment
+        target_environment = next(
+            (env for env in agent.environments if env.name == environment), 
+            None
+        )
+        
+        if not target_environment:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Environment '{environment}' not found for data agent '{agent.name}'"
+            )
             
-        # Verify source and target tables exist and belong to this agent
-        source_table = await prisma.dataagentTable.find_unique(
+        # Verify source and target tables exist and belong to this agent and environment
+        source_table = await prisma.dataagenttable.find_unique(
             where={"id": relation_data.sourceTableId}
         )
-        target_table = await prisma.dataagentTable.find_unique(
+        target_table = await prisma.dataagenttable.find_unique(
             where={"id": relation_data.targetTableId}
         )
         
-        if not source_table or source_table.dataAgentId != agent_id:
+        if not source_table or source_table.dataAgentId != agent_id or source_table.environmentId != target_environment.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid source table ID"
+                detail="Invalid source table ID or table not in specified environment"
             )
             
-        if not target_table or target_table.dataAgentId != agent_id:
+        if not target_table or target_table.dataAgentId != agent_id or target_table.environmentId != target_environment.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid target table ID"
+                detail="Invalid target table ID or table not in specified environment"
             )
             
-        # Create the relationship
-        new_relation = await prisma.dataagentRelation.create(data={
+        # Create the relationship with environment ID
+        new_relation = await prisma.dataagentrelation.create(data={
             "dataAgentId": agent_id,
+            "environmentId": target_environment.id,  # Add environment scoping
             "sourceTableId": relation_data.sourceTableId,
             "targetTableId": relation_data.targetTableId,
             "relationshipType": relation_data.relationshipType,
