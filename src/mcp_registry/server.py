@@ -11,13 +11,15 @@ import bcrypt
 from .config import settings
 from .database import init_db, close_prisma, get_prisma
 from .health_check import setup_scheduler, router as health_check_router
+from .data_agents import router as data_agents_router
 from .models import (
     ApplicationEndpointsRegistration,
     ApplicationUpdate,
     RegistrationResult,
     ApplicationResponse,
     EndpointsWithEnvironmentResponse,
-    ApplicationWithEnvironmentEndpoints
+    ApplicationWithEnvironmentEndpoints,
+    ApplicationWithEnvironmentEndpointsSecure
 )
 from .auth import (
     validate_application_access,
@@ -96,6 +98,9 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Include health check router
 app.include_router(health_check_router)
+
+# Include data agents router
+app.include_router(data_agents_router)
 
 # Events
 @app.on_event("startup")
@@ -311,10 +316,19 @@ async def list_applications(
     """
     async with get_prisma() as prisma:
         applications = await prisma.application.find_many()
-        return applications
+        
+        # Convert to response format with default authenticationMethod
+        response_data = []
+        for app in applications:
+            app_dict = app.dict()
+            if app_dict.get("authenticationMethod") is None:
+                app_dict["authenticationMethod"] = "API_KEY"
+            response_data.append(app_dict)
+            
+        return response_data
 
 # Endpoint 5: List all applications with their endpoints
-@app.get("/applications/with-endpoints")
+@app.get("/applications/with-endpoints", response_model=List[ApplicationWithEnvironmentEndpointsSecure])
 async def list_applications_with_endpoints(
     admin_key: str = Depends(verify_admin_key),
     environment: Optional[str] = "production"
@@ -323,7 +337,7 @@ async def list_applications_with_endpoints(
     List all applications with their endpoints for a specific environment.
     Requires admin authentication.
     
-    Returns a list of applications, each with their environment data (including baseDomain) 
+    Returns a list of applications, each with their environment data (including baseDomain and security) 
     and associated endpoints.
     """
     async with get_prisma() as prisma:
@@ -345,7 +359,12 @@ async def list_applications_with_endpoints(
             endpoints = []
             
             if app_env:
-                # Create environment data, safely handling the baseDomain field
+                # Get environment security details
+                security_data = await prisma.environmentsecurity.find_unique(
+                    where={"environmentId": app_env.id}
+                )
+                
+                # Create environment data with security details
                 environment_data = {
                     "id": app_env.id,
                     "name": app_env.name,
@@ -354,7 +373,8 @@ async def list_applications_with_endpoints(
                     "status": app_env.status,
                     "createdAt": app_env.createdAt,
                     "updatedAt": app_env.updatedAt,
-                    "applicationId": app_env.applicationId
+                    "applicationId": app_env.applicationId,
+                    "security": security_data
                 }
                 
                 # Get endpoints for this application and environment
@@ -372,7 +392,7 @@ async def list_applications_with_endpoints(
                 "description": app.description,
                 "appKey": app.appKey,
                 "status": app.status,
-                "authenticationMethod": app.authenticationMethod,
+                "authenticationMethod": app.authenticationMethod or "API_KEY",  # Default to API_KEY if null
                 "healthCheckUrl": app.healthCheckUrl,
                 "createdAt": app.createdAt,
                 "updatedAt": app.updatedAt,

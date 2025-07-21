@@ -200,10 +200,27 @@ class ApplicationWithEnvironmentDetail(BaseModel):
     createdAt: datetime
     updatedAt: datetime
     applicationId: str
+
+class ApplicationWithEnvironmentDetailSecure(BaseModel):
+    """Model for environment data with security details for admin responses"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    baseDomain: Optional[str] = None
+    status: str
+    createdAt: datetime
+    updatedAt: datetime
+    applicationId: str
+    security: Optional[EnvironmentSecurityResponse] = None
     
 class ApplicationWithEnvironmentEndpoints(ApplicationResponse):
     """Response model for application with environment and endpoints"""
     environment: Optional[ApplicationWithEnvironmentDetail] = None
+    endpoints: List[EndpointResponse] = []
+
+class ApplicationWithEnvironmentEndpointsSecure(ApplicationResponse):
+    """Response model for application with environment (including security) and endpoints"""
+    environment: Optional[ApplicationWithEnvironmentDetailSecure] = None
     endpoints: List[EndpointResponse] = []
 
 # Health Check Models
@@ -244,3 +261,139 @@ class ApplicationHealthStatusResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# Data Agent Models
+class DataAgentBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    connectionType: str  # "bigquery", "databricks", "postgres", "mysql", "sqlite", etc.
+
+class DataAgentCreate(DataAgentBase):
+    pass  # Only needs the base fields: name, description, connectionType
+
+class DataAgentUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    connectionType: Optional[str] = None
+    status: Optional[str] = None
+
+class DataAgentResponse(DataAgentBase):
+    id: str
+    status: str  # ACTIVE, INACTIVE, CONNECTING, ERROR
+    createdAt: datetime
+    updatedAt: datetime
+    userId: str
+
+    class Config:
+        from_attributes = True
+
+# Data Agent Table Models
+class DataAgentTableColumnBase(BaseModel):
+    columnName: str
+    dataType: str
+    isNullable: bool = True
+    defaultValue: Optional[str] = None
+    comment: Optional[str] = None
+    isIndexed: bool = False
+    isPrimaryKey: bool = False
+    isForeignKey: bool = False
+    referencedTable: Optional[str] = None
+    referencedColumn: Optional[str] = None
+    aiDescription: Optional[str] = None
+
+class DataAgentTableColumnResponse(DataAgentTableColumnBase):
+    id: str
+    tableId: str
+    createdAt: datetime
+    updatedAt: datetime
+
+    class Config:
+        from_attributes = True
+
+class DataAgentTableBase(BaseModel):
+    tableName: str
+    schemaName: Optional[str] = None
+    displayName: Optional[str] = None
+    description: Optional[str] = None
+    rowCount: Optional[int] = None
+    isActive: bool = True
+
+class DataAgentTableResponse(DataAgentTableBase):
+    id: str
+    dataAgentId: str
+    analysisStatus: str  # PENDING, ANALYZING, COMPLETED, FAILED
+    analysisResult: Optional[Dict[str, Any]] = None
+    createdAt: datetime
+    updatedAt: datetime
+    columns: List[DataAgentTableColumnResponse] = []
+
+    class Config:
+        from_attributes = True
+
+# Data Agent Relation Models
+class DataAgentRelationBase(BaseModel):
+    sourceTableId: str
+    targetTableId: str
+    relationshipType: str  # "one_to_one", "one_to_many", "many_to_many"
+    sourceColumn: str
+    targetColumn: str
+    description: Optional[str] = None
+    example: Optional[str] = None
+    confidence: Optional[float] = None
+    isVerified: bool = False
+
+class DataAgentRelationCreate(DataAgentRelationBase):
+    dataAgentId: str
+
+class DataAgentRelationUpdate(BaseModel):
+    relationshipType: Optional[str] = None
+    sourceColumn: Optional[str] = None
+    targetColumn: Optional[str] = None
+    description: Optional[str] = None
+    example: Optional[str] = None
+    confidence: Optional[float] = None
+    isVerified: Optional[bool] = None
+
+class DataAgentRelationResponse(DataAgentRelationBase):
+    id: str
+    dataAgentId: str
+    createdAt: datetime
+    updatedAt: datetime
+
+    class Config:
+        from_attributes = True
+
+# Comprehensive Data Agent Response with nested data
+class DataAgentWithTablesResponse(DataAgentResponse):
+    tables: List[DataAgentTableResponse] = []
+    relations: List[DataAgentRelationResponse] = []
+
+# Environment-specific Data Agent Response Models
+class DataAgentWithEnvironmentResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    connectionType: str  # The database type for this data agent
+    status: str
+    userId: str
+    createdAt: datetime
+    updatedAt: datetime
+    
+    # Environment details
+    environments: List[Dict] = []  # List of environments for this data agent
+    tables: List[DataAgentTableResponse] = []  # Tables from specific environment if filtered
+    relations: List[DataAgentRelationResponse] = []  # Relations from specific environment if filtered
+
+    class Config:
+        from_attributes = True
+
+# Analysis Request/Response Models
+class DataAgentAnalysisRequest(BaseModel):
+    analysisType: str  # "tables", "relationships", "full"
+    targetTables: Optional[List[str]] = None  # Specific tables to analyze
+
+class DataAgentAnalysisResponse(BaseModel):
+    analysisId: str
+    status: str  # "started", "completed", "failed"
+    message: Optional[str] = None
+    results: Optional[Dict[str, Any]] = None
