@@ -195,8 +195,6 @@ async def update_application(
     
         # Update the application - only specific fields allowed
         update_data = {}
-        if app_data.name is not None:
-            update_data["name"] = app_data.name
         if app_data.description is not None:
             update_data["description"] = app_data.description
         if app_data.healthCheckUrl is not None:
