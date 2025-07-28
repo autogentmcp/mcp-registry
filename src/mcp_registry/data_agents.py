@@ -29,7 +29,9 @@ from .models import (
     DataAgentRelationUpdate,
     DataAgentRelationResponse,
     DataAgentAnalysisRequest,
-    DataAgentAnalysisResponse
+    DataAgentAnalysisResponse,
+    ApplicationWithEnvironmentDetail,
+    ApplicationWithEnvironmentDetailSecure
 )
 
 # Configure logging
@@ -122,7 +124,7 @@ async def get_data_agents_with_environment_details(
                 }
             },
             include={
-                "environments": True  # Get all environments for each data agent
+                "environments": True  # Get all environments - vaultKey is directly on Environment
             },
             order={"createdAt": "desc"}
         )
@@ -161,7 +163,7 @@ async def get_data_agents_with_environment_details(
                 "userId": agent.userId,
                 "createdAt": agent.createdAt,
                 "updatedAt": agent.updatedAt,
-                "environments": [target_environment.__dict__],  # Only show the specific environment
+                "environments": [ApplicationWithEnvironmentDetail.parse_obj(target_environment.__dict__).dict()],
                 "tables": tables or [],
                 "relations": relations or []
             }
@@ -189,7 +191,7 @@ async def get_data_agent_environment_details(
         data_agent = await prisma.dataagent.find_unique(
             where={"id": agent_id},
             include={
-                "environments": True
+                "environments": True  # Get all environments - vaultKey is directly on Environment
             }
         )
         
@@ -237,7 +239,7 @@ async def get_data_agent_environment_details(
             "userId": data_agent.userId,
             "createdAt": data_agent.createdAt,
             "updatedAt": data_agent.updatedAt,
-            "environments": [target_environment.__dict__],  # Only the specific environment
+            "environments": [ApplicationWithEnvironmentDetail.parse_obj(target_environment.__dict__).dict()],
             "tables": tables or [],
             "relations": relations or []
         }
