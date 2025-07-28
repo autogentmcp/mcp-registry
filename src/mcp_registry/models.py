@@ -29,6 +29,7 @@ class ApplicationResponse(ApplicationBase):
 class EnvironmentBase(BaseModel):
     name: str
     description: Optional[str] = None
+    customPrompt: Optional[str] = None
     baseDomain: Optional[str] = None
 
 class EnvironmentCreate(EnvironmentBase):
