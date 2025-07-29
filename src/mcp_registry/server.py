@@ -335,12 +335,20 @@ async def list_applications_with_endpoints(
     List all applications with their endpoints for a specific environment.
     Requires admin authentication.
     
+    Only returns applications that have the specified environment.
     Returns a list of applications, each with their environment data (including baseDomain and security) 
     and associated endpoints.
     """
     async with get_prisma() as prisma:
-        # Get all applications
+        # Get only applications that have the specified environment
         applications = await prisma.application.find_many(
+            where={
+                "environments": {
+                    "some": {
+                        "name": environment
+                    }
+                }
+            },
             include={
                 "environments": True
             }
@@ -350,38 +358,38 @@ async def list_applications_with_endpoints(
         
         # For each application, get its endpoints
         for app in applications:
-            # Find the specified environment for this application
+            # Find the specified environment for this application (we know it exists due to our filter)
             app_env = next((env for env in app.environments if env.name == environment), None)
             
-            environment_data = None
-            endpoints = []
+            # This should not happen due to our query filter, but safety check
+            if not app_env:
+                continue
             
-            if app_env:
-                # Get environment security details
-                security_data = await prisma.environmentsecurity.find_unique(
-                    where={"environmentId": app_env.id}
-                )
-                
-                # Create environment data with security details
-                environment_data = {
-                    "id": app_env.id,
-                    "name": app_env.name,
-                    "description": app_env.description,
-                    "baseDomain": getattr(app_env, "baseDomain", None),
-                    "status": app_env.status,
-                    "createdAt": app_env.createdAt,
-                    "updatedAt": app_env.updatedAt,
-                    "applicationId": app_env.applicationId,
-                    "security": security_data
+            # Get environment security details
+            security_data = await prisma.environmentsecurity.find_unique(
+                where={"environmentId": app_env.id}
+            )
+            
+            # Create environment data with security details
+            environment_data = {
+                "id": app_env.id,
+                "name": app_env.name,
+                "description": app_env.description,
+                "baseDomain": getattr(app_env, "baseDomain", None),
+                "status": app_env.status,
+                "createdAt": app_env.createdAt,
+                "updatedAt": app_env.updatedAt,
+                "applicationId": app_env.applicationId,
+                "security": security_data
+            }
+            
+            # Get endpoints for this application and environment
+            endpoints = await prisma.endpoint.find_many(
+                where={
+                    "applicationId": app.id,
+                    "environmentId": app_env.id
                 }
-                
-                # Get endpoints for this application and environment
-                endpoints = await prisma.endpoint.find_many(
-                    where={
-                        "applicationId": app.id,
-                        "environmentId": app_env.id
-                    }
-                )
+            )
             
             # Create a response object directly
             app_data = {

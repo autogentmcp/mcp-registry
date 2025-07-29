@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
+import json
 
 # Application models
 class ApplicationBase(BaseModel):
@@ -31,6 +32,16 @@ class EnvironmentBase(BaseModel):
     description: Optional[str] = None
     customPrompt: Optional[str] = None
     baseDomain: Optional[str] = None
+    connectionConfig: Optional[Union[str, Dict[str, Any]]] = None
+
+    @validator('connectionConfig', pre=True)
+    def parse_connection_config(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
 class EnvironmentCreate(EnvironmentBase):
     applicationId: str
@@ -38,8 +49,19 @@ class EnvironmentCreate(EnvironmentBase):
 class EnvironmentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    customPrompt: Optional[str] = None
+    connectionConfig: Optional[Union[str, Dict[str, Any]]] = None
     status: Optional[str] = None
     baseDomain: Optional[str] = None
+
+    @validator('connectionConfig', pre=True)
+    def parse_connection_config(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
 class EnvironmentResponse(EnvironmentBase):
     id: str
@@ -47,6 +69,7 @@ class EnvironmentResponse(EnvironmentBase):
     createdAt: datetime
     updatedAt: datetime
     applicationId: str
+    vaultKey: Optional[str] = None  # Added vaultKey to base environment response
 
     class Config:
         from_attributes = True
@@ -58,10 +81,19 @@ class EndpointBase(BaseModel):
     method: str
     description: Optional[str] = None
     isPublic: bool = False
-    pathParams: Optional[Dict[str, Any]] = None
-    queryParams: Optional[Dict[str, Any]] = None
-    requestBody: Optional[Dict[str, Any]] = None
-    responseBody: Optional[Dict[str, Any]] = None
+    pathParams: Optional[Union[str, Dict[str, Any]]] = None
+    queryParams: Optional[Union[str, Dict[str, Any]]] = None
+    requestBody: Optional[Union[str, Dict[str, Any]]] = None
+    responseBody: Optional[Union[str, Dict[str, Any]]] = None
+
+    @validator('pathParams', 'queryParams', 'requestBody', 'responseBody', pre=True)
+    def parse_json_fields(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
 class EndpointResponse(BaseModel):
     id: str
@@ -70,14 +102,23 @@ class EndpointResponse(BaseModel):
     method: str
     description: Optional[str] = None
     isPublic: bool = False
-    pathParams: Optional[Dict[str, Any]] = None
-    queryParams: Optional[Dict[str, Any]] = None
-    requestBody: Optional[Dict[str, Any]] = None
-    responseBody: Optional[Dict[str, Any]] = None
+    pathParams: Optional[Union[str, Dict[str, Any]]] = None
+    queryParams: Optional[Union[str, Dict[str, Any]]] = None
+    requestBody: Optional[Union[str, Dict[str, Any]]] = None
+    responseBody: Optional[Union[str, Dict[str, Any]]] = None
     createdAt: datetime
     updatedAt: datetime
     applicationId: str
     environmentId: Optional[str] = None
+
+    @validator('pathParams', 'queryParams', 'requestBody', 'responseBody', pre=True)
+    def parse_json_fields(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
     class Config:
         from_attributes = True
@@ -90,10 +131,19 @@ class EndpointRegistration(BaseModel):
     method: str
     description: Optional[str] = None
     isPublic: bool = False
-    pathParams: Optional[Dict[str, Any]] = None
-    queryParams: Optional[Dict[str, Any]] = None
-    requestBody: Optional[Dict[str, Any]] = None
-    responseBody: Optional[Dict[str, Any]] = None
+    pathParams: Optional[Union[str, Dict[str, Any]]] = None
+    queryParams: Optional[Union[str, Dict[str, Any]]] = None
+    requestBody: Optional[Union[str, Dict[str, Any]]] = None
+    responseBody: Optional[Union[str, Dict[str, Any]]] = None
+
+    @validator('pathParams', 'queryParams', 'requestBody', 'responseBody', pre=True)
+    def parse_json_fields(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
 class ApplicationEndpointsRegistration(BaseModel):
     """Model for registering multiple endpoints for an application"""
@@ -196,23 +246,47 @@ class ApplicationWithEnvironmentDetail(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    customPrompt: Optional[str] = None
     baseDomain: Optional[str] = None
+    connectionConfig: Optional[Union[str, Dict[str, Any]]] = None
     status: str
     createdAt: datetime
     updatedAt: datetime
-    applicationId: str
+    applicationId: Optional[str] = None  # Made optional since environments can belong to data agents too
+    vaultKey: Optional[str] = None  # Added vaultKey directly to environment
+
+    @validator('connectionConfig', pre=True)
+    def parse_connection_config(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
 class ApplicationWithEnvironmentDetailSecure(BaseModel):
     """Model for environment data with security details for admin responses"""
     id: str
     name: str
     description: Optional[str] = None
+    customPrompt: Optional[str] = None
     baseDomain: Optional[str] = None
+    connectionConfig: Optional[Union[str, Dict[str, Any]]] = None
     status: str
     createdAt: datetime
     updatedAt: datetime
-    applicationId: str
+    applicationId: Optional[str] = None  # Made optional since environments can belong to data agents too
+    vaultKey: Optional[str] = None  # Added vaultKey directly to environment
     security: Optional[EnvironmentSecurityResponse] = None
+
+    @validator('connectionConfig', pre=True)
+    def parse_connection_config(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
     
 class ApplicationWithEnvironmentEndpoints(ApplicationResponse):
     """Response model for application with environment and endpoints"""
@@ -323,10 +397,19 @@ class DataAgentTableResponse(DataAgentTableBase):
     id: str
     dataAgentId: str
     analysisStatus: str  # PENDING, ANALYZING, COMPLETED, FAILED
-    analysisResult: Optional[Dict[str, Any]] = None
+    analysisResult: Optional[Union[str, Dict[str, Any]]] = None
     createdAt: datetime
     updatedAt: datetime
     columns: List[DataAgentTableColumnResponse] = []
+
+    @validator('analysisResult', pre=True)
+    def parse_analysis_result(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
 
     class Config:
         from_attributes = True
@@ -397,4 +480,13 @@ class DataAgentAnalysisResponse(BaseModel):
     analysisId: str
     status: str  # "started", "completed", "failed"
     message: Optional[str] = None
-    results: Optional[Dict[str, Any]] = None
+    results: Optional[Union[str, Dict[str, Any]]] = None
+
+    @validator('results', pre=True)
+    def parse_results(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v  # Return as string if invalid JSON
+        return v
